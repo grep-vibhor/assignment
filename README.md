@@ -5,13 +5,13 @@ Assuming DB is running on localhost, Schema Name is `node`
 
 `node` Schema contains a table called `employee` which has some records. You can use data.sql file to import the data.
 
-Application reads DB configs from env variables `DB\_HOST`, `DB\_USER`, `DB\_PASSOWRD`, `DB\_SCHEMA`
+Application reads DB configs from env variables `DB_HOST`, `DB_USER`, `DB_PASSOWRD`, `DB_SCHEMA`
 
 ```
-export DB\_HOST=localhost
-export DB\_USER=root
-export DB\_PASSOWRD=root
-export DB\_SCHEMA=node
+export DB_HOST=localhost
+export DB_USER=root
+export DB_PASSOWRD=root
+export DB_SCHEMA=node
 npm i
 node index.js
 
