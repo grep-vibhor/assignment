@@ -21,7 +21,9 @@ node index.js
 It'll start a local node server on port 9090. 
 
 curl localhost:9090/health  -> Health Check URL
+
 curl localhost:9090/employees  ->  URL  to fetch all employees
+
 curl localhost:9090/employee/:id -> URL to fetch an employee with id
 
 
