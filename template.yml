@@ -1,0 +1,1020 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Docker'
+
+Parameters:
+  ProjectName:
+    Description: Name of The project which will used as prefix in all rsource names
+    Type: String
+    Default: Test
+  Owner:
+    Type: String
+    Default: grep-vibhor
+  Repo:
+    Type: String
+    Default: assignment
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the servers
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  VpcBlock:
+    Type: String
+    Default: 192.168.0.0/16
+    Description: The CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
+  PublicSubnet01Block:
+    Type: String
+    Default: 192.168.0.0/18
+    Description: CidrBlock for public subnet 01 within the VPC
+  PublicSubnet02Block:
+    Type: String
+    Default: 192.168.64.0/18
+    Description: CidrBlock for public subnet 02 within the VPC
+  PrivateSubnet01Block:
+    Type: String
+    Default: 192.168.128.0/18
+    Description: CidrBlock for private subnet 01 within the VPC
+  PrivateSubnet02Block:
+    Type: String
+    Default: 192.168.192.0/18
+    Description: CidrBlock for private subnet 02 within the VPC
+  DBInstanceType:
+    Description: DBServer EC2 instance type
+    Type: String
+    Default: t2.medium
+  ServerInstanceType:
+    Description: Server EC2 instance type
+    Type: String
+    Default: t2.medium
+  BastionInstanceType:
+    Description: Bastion EC2 instance type
+    Type: String
+    Default: t2.small
+
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the Bastion server
+    Type: String
+    Default: 0.0.0.0/0
+    ConstraintDescription: IP CIDR range of the form x.x.x.x/x.
+  ServerInstanceAmi:
+    Description: The AMI image to use for Node Server
+    Type: String
+    Default: ami-0c1a7f89451184c8b
+  BastionAmi:
+    Description: The AMI image to use for Bastion Server
+    Type: String
+    Default: ami-0c1a7f89451184c8b
+  DBInstanceAmi:
+    Description: The AMI image to use for DB Server
+    Type: String
+    Default: ami-03cfb5e1fb4fac428
+  LoadBalancerWhitelisting:
+    Description: The IP address range that can be used to reach Load Balancer
+    Type: String
+    Default: 0.0.0.0/0
+    ConstraintDescription: IP CIDR range of the form x.x.x.x/x.
+  DBName:
+    Default: node
+    Type: String
+    Description: MySQL custom Schema
+  DBUser:
+    NoEcho: 'true'
+    Type: String
+    Description: MySQL custom user
+  DBPassword:
+    NoEcho: 'true'
+    Type: String
+    Description: MySQL custom user password
+  DBRootPassword:
+    NoEcho: 'true'
+    Description: MySQL root password
+    Type: String
+  DockerVersion:
+    Description: 'Specifies the version of the Docker engine'
+    Type: String
+    Default: "1.13.0"
+  DesiredInstances:
+    Description: 'Specifies the desired capacity of ASG'
+    Default: 2
+    Type: Number
+  SqlBucket:
+    Description: 'Specifies the Bucket Name for sql file'
+    Type: String
+    Default: "kahfklfklahfkahfklahkf"
+  AlertEmail:
+    Description: 'Specifies Email for Alert Triggering'
+    Type: String
+    Default: "vibhorjain265@gmail.com"
+  HealthPath:
+    Description: 'Health Path for API G/w'
+    Type: String
+    Default: "health"
+  ApiDeploymentName:
+    Description: 'Deployment name that will be used in stage of API Gateway'
+    Type: String
+    Default: "prod"
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:  !Ref VpcBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "vpc" ] ]
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+
+  VPCGatewayAttachment:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "pub-rtb" ] ]
+        - Key: Network
+          Value: Public
+
+  PrivateRouteTable01:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "priv-rtb-az1" ] ]
+        - Key: Network
+          Value: Private01
+
+  PrivateRouteTable02:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "priv-rtb-az2" ] ]
+        - Key: Network
+          Value: Private02
+
+  PublicRoute:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PrivateRoute01:
+    DependsOn:
+      - VPCGatewayAttachment
+      - NatGateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable01
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateRoute02:
+    DependsOn:
+      - VPCGatewayAttachment
+      - NatGateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable02
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt 'NatGatewayEIP.AllocationId'
+      SubnetId: !Ref PublicSubnet01
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "nat-gateway" ] ]
+
+  NatGatewayEIP:
+    DependsOn:
+      - VPCGatewayAttachment
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+
+  PublicSubnet01:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public Subnet 01
+    Properties:
+      MapPublicIpOnLaunch: true
+      AvailabilityZone:
+        Fn::Select:
+          - '0'
+          - Fn::GetAZs:
+              Ref: AWS::Region
+      CidrBlock:
+        Ref: PublicSubnet01Block
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "pub-sub-az1" ] ]
+
+  PublicSubnet02:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public Subnet 02
+    Properties:
+      MapPublicIpOnLaunch: true
+      AvailabilityZone:
+        Fn::Select:
+          - '1'
+          - Fn::GetAZs:
+              Ref: AWS::Region
+      CidrBlock:
+        Ref: PublicSubnet02Block
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "pub-sub-az2" ] ]
+
+  PrivateSubnet01:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet 01
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - '0'
+          - Fn::GetAZs:
+              Ref: AWS::Region
+      CidrBlock:
+        Ref: PrivateSubnet01Block
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "priv-sub-az1" ] ]
+
+  PrivateSubnet02:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet 02
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - '1'
+          - Fn::GetAZs:
+              Ref: AWS::Region
+      CidrBlock:
+        Ref: PrivateSubnet02Block
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [ !Ref ProjectName, "priv-sub-az2" ] ]
+
+  PublicSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet01
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet02
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet01
+      RouteTableId: !Ref PrivateRouteTable01
+
+  PrivateSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet02
+      RouteTableId: !Ref PrivateRouteTable02
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join [ "-", [ !Ref ProjectName, "bastion-sg" ] ]
+      GroupDescription: Enable access via port 22
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp:
+            Ref: SSHLocation
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "bastion-sg" ] ]
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join [ "-", [ !Ref ProjectName, "server-lb-sg" ] ]
+      GroupDescription: Enable access via port 9090
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp:
+            Ref: LoadBalancerWhitelisting
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "server-lb-sg" ] ]
+
+  ###############################  bastion for testing purposes only #################
+
+  BaseBastionInstance:
+    DependsOn:
+      - VPC
+      - InternetGateway
+      - VPCGatewayAttachment
+      - PublicRouteTable
+      - PrivateRouteTable01
+      - PrivateRouteTable02
+      - PublicRoute
+      - PrivateRoute01
+      - PrivateRoute02
+      - NatGateway
+      - NatGatewayEIP
+      - PublicSubnet01
+      - PublicSubnet02
+      - PrivateSubnet01
+      - PrivateSubnet02
+      - PublicSubnet01RouteTableAssociation
+      - PublicSubnet02RouteTableAssociation
+      - PrivateSubnet01RouteTableAssociation
+      - PrivateSubnet02RouteTableAssociation
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref BastionAmi  # Ubuntu ami
+      InstanceType:
+        Ref: BastionInstanceType
+      KeyName:
+        Ref: KeyName
+      Tags:
+        - Key: "Name"
+          Value: !Join ["-", [ !Ref ProjectName, "base-bastion-server" ] ]
+      SecurityGroupIds:
+        - !GetAtt  "BastionSecurityGroup.GroupId"
+      SubnetId: !Ref PublicSubnet01
+
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join [ "-", [ !Ref ProjectName, "server-sg" ] ]
+      GroupDescription: Enable access via port 9090
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '9090'
+          ToPort: '9090'
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "node-server-sg" ] ]
+
+  InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref IAMRole
+
+  IAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join [ "-", [ !Ref ProjectName, "server-role" ] ]
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "server-role" ] ]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: !Join [ "-", [ !Ref ProjectName, "node-server-policy" ] ]
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'autoscaling:DescribeAutoScalingGroups'
+                  - 'autoscaling:DescribeAutoScalingInstances'
+                  - 'ec2:DescribeInstances'
+                  - 's3:Get*'
+                Resource:
+                  - '*'
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - DBServer
+    Properties:
+      AutoScalingGroupName: !Join [ "-", [ !Ref ProjectName, "node-server-asg" ] ]
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet01
+        - !Ref PrivateSubnet02
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: !Ref DesiredInstances
+      MaxSize: !Ref DesiredInstances
+      DesiredCapacity: !Ref DesiredInstances
+      MetricsCollection:
+        - Granularity: 1Minute
+          Metrics:
+            - GroupInServiceInstances
+      TargetGroupARNs:
+        - !Ref TargetGroupServer
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "node-server-asg" ] ]
+          PropagateAtLaunch: 'true'
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: !Ref DesiredInstances
+        MaxBatchSize: '1'
+        PauseTime: PT10M
+        SuspendProcesses:
+          - AlarmNotification
+        WaitOnResourceSignals: 'true'
+
+  DBServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join [ "-", [ !Ref ProjectName, "database-sg" ] ]
+      GroupDescription: >-
+        Enable Mysql access via port 3306
+      VpcId : !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          SourceSecurityGroupId: !Ref ServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "database-sg" ] ]
+
+  DBServer:
+    DependsOn:
+      - VPC
+      - InternetGateway
+      - VPCGatewayAttachment
+      - PublicRouteTable
+      - PrivateRouteTable01
+      - PrivateRouteTable02
+      - PublicRoute
+      - PrivateRoute01
+      - PrivateRoute02
+      - NatGateway
+      - NatGatewayEIP
+      - PublicSubnet01
+      - PublicSubnet02
+      - PrivateSubnet01
+      - PrivateSubnet02
+      - PublicSubnet01RouteTableAssociation
+      - PublicSubnet02RouteTableAssociation
+      - PrivateSubnet01RouteTableAssociation
+      - PrivateSubnet02RouteTableAssociation
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          mysql_install:
+            - install_cfn
+            - install_mysql
+            - configure_mysql
+        install_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content:
+                Fn::Join:
+                  - ''
+                  - - |
+                      [main]
+                    - stack=
+                    - Ref: AWS::StackId
+                    - |+
+
+                    - region=
+                    - Ref: AWS::Region
+                    - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content:
+                Fn::Join:
+                  - ''
+                  - - |
+                      [cfn-auto-reloader-hook]
+                    - |
+                      triggers=post.update
+                    - >
+                      path=Resources.DBServer.Metadata.AWS::CloudFormation::Init
+                    - 'action=/opt/aws/bin/cfn-init -v '
+                    - '         --stack '
+                    - Ref: AWS::StackName
+                    - '         --resource DBServer '
+                    - '         --configsets mysql_install '
+                    - '         --region '
+                    - Ref: AWS::Region
+                    - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+        install_mysql:
+          packages:
+            yum:
+              mysql57: []
+              mysql57-server: []
+              mysql57-devel: []
+              mysql57-libs: []
+          files:
+            /tmp/setup.mysql:
+              content:
+                Fn::Join:
+                  - ''
+                  - - 'CREATE DATABASE '
+                    - Ref: DBName
+                    - |
+                      ;
+                    - CREATE USER '
+                    - Ref: DBUser
+                    - '''@''%'' IDENTIFIED BY '''
+                    - Ref: DBPassword
+                    - |
+                      ';
+                    - GRANT ALL ON *.* TO '
+                    - Ref: DBUser
+                    - |
+                      '@'%';
+                    - |
+                      FLUSH PRIVILEGES;
+              mode: '000400'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              mysqld:
+                enabled: 'true'
+                ensureRunning: 'true'
+        configure_mysql:
+          commands:
+            01_set_mysql_root_password:
+              command:
+                Fn::Join:
+                  - ''
+                  - - mysqladmin -u root password '
+                    - Ref: DBRootPassword
+                    - ''''
+              test:
+                Fn::Join:
+                  - ''
+                  - - '$(mysql '
+                    - Ref: DBName
+                    - ' -u root --password='''
+                    - Ref: DBRootPassword
+                    - ''' >/dev/null 2>&1 </dev/null); (( $? != 0 ))'
+            02_create_database:
+              command:
+                Fn::Join:
+                  - ''
+                  - - mysql -u root --password='
+                    - Ref: DBRootPassword
+                    - ''' < /tmp/setup.mysql'
+              test:
+                Fn::Join:
+                  - ''
+                  - - '$(mysql '
+                    - Ref: DBName
+                    - ' -u root --password='''
+                    - Ref: DBRootPassword
+                    - ''' >/dev/null 2>&1 </dev/null); (( $? != 0 ))'
+            03_restore_sql:
+              command: !Sub 'aws s3 cp s3://${SqlBucket}/data.sql /root/data.sql'
+            04_restore_sql:
+              command: !Sub 'mysql -u root --password=${DBRootPassword} ${DBName} < /root/data.sql'
+
+    Properties:
+      ImageId:
+        Ref: DBInstanceAmi
+      InstanceType:
+        Ref: DBInstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !GetAtt "DBServerSecurityGroup.GroupId"
+      KeyName:
+        Ref: KeyName
+      SubnetId: !Ref PrivateSubnet01
+      Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref ProjectName, "database-instance" ] ]
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ''
+            - - |
+                #!/bin/bash -xe
+              - |
+                yum update -y aws-cfn-bootstrap
+              - '/opt/aws/bin/cfn-init -v '
+              - '         --stack '
+              - Ref: AWS::StackName
+              - '         --resource DBServer '
+              - '         --configsets mysql_install '
+              - '         --region '
+              - Ref: AWS::Region
+              - |+
+
+              - '/opt/aws/bin/cfn-signal -e $? '
+              - '         --stack '
+              - Ref: AWS::StackName
+              - '         --resource DBServer '
+              - '         --region '
+              - Ref: AWS::Region
+              - |+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+
+  LaunchConfiguration:
+    DependsOn:
+      - DBServer
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+            full_install:
+              - install_and_enable_cfn_hup
+              - workspace
+              - docker_install
+              - docker_build
+        install_and_enable_cfn_hup:
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              content:
+                Fn::Join:
+                  - ''
+                  - - "[main]\n"
+                    - stack=
+                    - Ref: AWS::StackId
+                    - "\n"
+                    - region=
+                    - Ref: AWS::Region
+                    - "\n"
+              mode: '000400'
+              owner: root
+              group: root
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content:
+                Fn::Join:
+                  - ''
+                  - - "[cfn-auto-reloader-hook]\n"
+                    - 'triggers=post.update
+                            '
+                    - 'path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
+                            '
+                    - 'action=/opt/aws/bin/cfn-init -v '
+                    - "         --stack "
+                    - Ref: AWS::StackName
+                    - "         --resource LaunchConfiguration "
+                    - "         --configsets full_install "
+                    - "         --region "
+                    - Ref: AWS::Region
+                    - "\n"
+                    - 'runas=root
+                            '
+        workspace:
+          commands:
+            a-initDir:
+              command: "sudo mkdir /app"
+        docker_install:
+          commands:
+            'a_update_certificates':
+              command: 'sudo apt update'
+            'b_set_gpg_key':
+              command: 'sudo apt install -y apt-transport-https ca-certificates curl software-properties-common'
+            'c_add_docker_repo':
+              command: 'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -'
+            'd_add_docker_repo':
+              command: 'sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable"'
+            'd_update_aptget':
+              command: 'sudo apt update'
+            'e_install_git':
+              command: 'sudo apt-get install -y git bind9-utils'
+            'e-getFromGit':
+              command: !Sub "sudo git clone https://github.com/${Owner}/${Repo}.git"
+              cwd: "/app"
+            'f_install_docker':
+              command: 'sudo apt install -y docker-ce'
+            'g_create_service':
+              command: 'sudo systemctl start docker'
+            'h_add_ubuntu_user_to_docker_group':
+              command: 'sudo usermod -aG docker ubuntu'
+        docker_build:
+          commands:
+            'a_docker_build':
+              command: 'sudo docker build . -t app:v1'
+              cwd: "/app/assignment"
+            'b_docker_run':
+              command: !Sub 'sudo docker run --name app -dit -p 9090:9090 -e DB_HOST=${DBServer.PrivateIp} -e DB_USER=${DBUser} -e DB_PASSWORD=${DBPassword} -e DB_SCHEMA=${DBName} app:v1'
+
+    Properties:
+      ImageId: !Ref ServerInstanceAmi
+      InstanceType: !Ref ServerInstanceType
+      SecurityGroups:
+        - !Ref ServerSecurityGroup
+      IamInstanceProfile: !Ref InstanceProfile
+      KeyName: !Ref KeyName
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ''
+            - - |
+                #!/bin/bash -xe
+              - |
+                apt-get update -y
+                mkdir -p /opt/aws/bin
+                wget https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz -O /root/aws-cfn-bootstrap-py3-latest.tar.gz
+                python3 -m easy_install --script-dir /opt/aws/bin /root/aws-cfn-bootstrap-py3-latest.tar.gz
+              - '/opt/aws/bin/cfn-init -v '
+              - '         --stack '
+              - Ref: AWS::StackName
+              - '         --resource LaunchConfiguration '
+              - '         --configsets full_install '
+              - '         --region '
+              - Ref: AWS::Region
+              - |+
+
+              - '/opt/aws/bin/cfn-signal -e $? '
+              - '         --stack '
+              - Ref: AWS::StackName
+              - '         --resource AutoScalingGroup '
+              - '         --region '
+              - Ref: AWS::Region
+              - |+
+
+  TargetGroupServer:
+    DependsOn:
+      - DBServer
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, "tg" ] ]
+      VpcId: !Ref VPC
+      TargetType: instance
+      Port: 9090
+      Protocol: HTTP
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /health
+      HealthCheckPort: 9090
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 4
+      UnhealthyThresholdCount: 2
+
+  ListenerRuleServer:
+    DependsOn:
+      - TargetGroupServer
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupServer
+      Conditions:
+        - Field: http-request-method
+          HttpRequestMethodConfig:
+            Values:
+              - GET_OR_POST
+      ListenerArn: !Ref ListenerServer
+      Priority: 1
+
+  ListenerServer:
+    DependsOn:
+      - TargetGroupServer
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupServer
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  LoadBalancer:
+    DependsOn:
+      - DBServer
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Join [ "-", [ !Ref ProjectName, "lb" ] ]
+      Subnets:
+        - !Ref PublicSubnet01
+        - !Ref PublicSubnet02
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+
+  SNSTopic:
+    DependsOn:
+      - AutoScalingGroup
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join [ "-", [ !Ref ProjectName, "alert-topic" ] ]
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  UnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: UnhealthyHost alarm for my Target Group
+      AlarmName: !Join [ "-", [ !Ref ProjectName, "UnhealthyHost-Alarm" ] ]
+      AlarmActions:
+        - Ref: SNSTopic
+      MetricName: UnHealthyHostCount
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '3'
+      DatapointsToAlarm: '3'
+      Threshold: '0'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt  "TargetGroupServer.TargetGroupFullName"
+        - Name: LoadBalancer
+          Value: !GetAtt  "LoadBalancer.LoadBalancerFullName"
+
+  ServerApi:
+    DependsOn:
+      - SNSTopic
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Join ["-", [ !Ref ProjectName, "api" ] ]
+      Description: API used for different requests
+      FailOnWarnings: true
+
+  ServerHealthApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    DependsOn:
+      - SNSTopic
+    Properties:
+      RestApiId: !Ref ServerApi
+      ParentId: !GetAtt ServerApi.RootResourceId
+      PathPart: !Ref HealthPath
+
+  ServerHealthRequest:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - SNSTopic
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: GET
+      ResourceId: !Ref ServerHealthApiGatewayResource
+      RestApiId: !Ref ServerApi
+      RequestParameters:
+        method.request.path.proxy: true
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        RequestParameters:
+          integration.request.path.proxy: 'method.request.path.proxy'
+        IntegrationHttpMethod: GET
+        Type: HTTP_PROXY
+        Uri: !Sub "http://${LoadBalancer.DNSName}/${HealthPath}"
+        IntegrationResponses:
+          - StatusCode: "200"
+
+  ServerApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    DependsOn:
+      - SNSTopic
+    Properties:
+      RestApiId: !Ref ServerApi
+      ParentId: !GetAtt ServerApi.RootResourceId
+      PathPart: "employees"
+
+  ServerRequest:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - SNSTopic
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: GET
+      ResourceId: !Ref ServerApiGatewayResource
+      RestApiId: !Ref ServerApi
+      RequestParameters:
+        method.request.path.proxy: true
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        RequestParameters:
+          integration.request.path.proxy: 'method.request.path.proxy'
+        IntegrationHttpMethod: GET
+        Type: HTTP_PROXY
+        Uri: !Sub "http://${LoadBalancer.DNSName}/employees"
+        IntegrationResponses:
+          - StatusCode: "200"
+
+  ServerApiStage:
+    DependsOn:
+      - ServerRequest
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: !Ref ApiDeploymentName
+      Description: !Join [" ", [ !Ref ApiDeploymentName, "Stage" ] ]
+      RestApiId: !Ref ServerApi
+      DeploymentId: !Ref ServerApiDeployment
+
+  ServerApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ServerRequest
+    Properties:
+      RestApiId: !Ref ServerApi
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value:
+      Ref: VPC
+
+  SubnetIds:
+    Description: The subnet IDs to use
+    Value: !Join [ ",", [ !Ref PublicSubnet01, !Ref PublicSubnet02, !Ref PrivateSubnet01, !Ref PrivateSubnet02 ] ]
+
+  PublicSubnetId01:
+    Description: The public subnet ID 01
+    Value: !Ref PublicSubnet01
+
+  PublicSubnetId02:
+    Description: The public subnet ID 02
+    Value: !Ref PublicSubnet02
+
+
+  PrivateSubnetId01:
+    Description: Private Subnet ID 01
+    Value: !Ref PrivateSubnet01
+
+  PrivateSubnetId02:
+    Description: Private Subnet ID 02
+    Value: !Ref PrivateSubnet02
+
+
+  LoadBalancerDNSName:
+    Description: DNS name for Load Balancer
+    Value: !Sub "${LoadBalancer.DNSName}"
+
+
+  apiGatewayInvokeURL:
+    Description: Invoke URL
+    Value: !Sub "https://${ServerApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerApiStage}"
+  apiGatewayInvokeURLHealthCheck:
+    Description: Invoke URL Example
+    Value: !Sub "https://${ServerApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerApiStage}/health"
+  apiGatewayInvokeURLEmployees:
+    Description: Invoke URL Example
+    Value: !Sub "https://${ServerApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerApiStage}/employees"
